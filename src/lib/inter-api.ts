@@ -20,11 +20,19 @@ const tokenCache = new Map<string, TokenCache>();
 const agentCache = new Map<string, https.Agent>();
 
 function buildHttpsAgent(certBase64: string, keyBase64: string): https.Agent {
-  return new https.Agent({
+  const agentOptions: https.AgentOptions = {
     cert: Buffer.from(certBase64, "base64").toString("utf8"),
     key: Buffer.from(keyBase64, "base64").toString("utf8"),
     rejectUnauthorized: true,
-  });
+  };
+
+  // Adiciona CA do Inter para validar o certificado do servidor
+  const caCertBase64 = process.env.INTER_CA_CERT_BASE64;
+  if (caCertBase64) {
+    agentOptions.ca = Buffer.from(caCertBase64, "base64").toString("utf8");
+  }
+
+  return new https.Agent(agentOptions);
 }
 
 // ─── Inter config loader ──────────────────────────────────────────────────────

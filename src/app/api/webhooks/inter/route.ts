@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac } from "crypto";
+import { createHmac, createVerify, X509Certificate } from "crypto";
 import { prisma } from "@/lib/prisma";
 import type { InterWebhookPayload } from "@/lib/inter-api";
 
@@ -8,8 +8,33 @@ function verifySignature(body: string, signature: string, secret: string): boole
   return signature === expected;
 }
 
+// Verifica se o certificado do cliente (enviado pelo Inter via mTLS) é válido
+// e foi emitido pela CA do Inter. Em produção, isso é feito pelo proxy reverso,
+// mas validamos aqui também via header x-ssl-client-cert quando disponível.
+function verifyInterCACert(clientCertHeader: string | null): boolean {
+  const caCertBase64 = process.env.INTER_CA_CERT_BASE64;
+  if (!caCertBase64 || !clientCertHeader) return true; // sem CA configurada, skip
+
+  try {
+    const caCertPem = Buffer.from(caCertBase64, "base64").toString("utf8");
+    const clientCertPem = decodeURIComponent(clientCertHeader);
+    const caCert = new X509Certificate(caCertPem);
+    const clientCert = new X509Certificate(clientCertPem);
+    return clientCert.verify(caCert.publicKey);
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.text();
+
+  // Valida certificado do cliente Inter (quando proxy repassa via header)
+  const clientCert = req.headers.get("x-ssl-client-cert");
+  if (!verifyInterCACert(clientCert)) {
+    console.warn("Inter webhook: certificado do cliente inválido");
+    return NextResponse.json({ error: "Invalid client certificate" }, { status: 403 });
+  }
 
   let payload: InterWebhookPayload;
   try {
