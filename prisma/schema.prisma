@@ -1,0 +1,505 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  EMPLOYEE
+  CLIENT
+}
+
+enum PostStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  ARCHIVED
+}
+
+enum SocialNetwork {
+  INSTAGRAM
+  FACEBOOK
+  INSTAGRAM_STORY
+  INSTAGRAM_REEL
+}
+
+enum ArtRequestStatus {
+  OPEN
+  IN_PROGRESS
+  IN_REVIEW
+  REVISION_REQUESTED
+  APPROVED
+  DELIVERED
+  CANCELLED
+}
+
+enum ArtRequestType {
+  POST
+  STORY
+  REEL
+  BANNER
+  CAROUSEL
+  COVER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REVISION_REQUESTED
+  REJECTED
+}
+
+enum NotificationChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum InvoiceStatus {
+  PENDING
+  BOLETO_CREATED
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+  EXPIRED
+}
+
+// ─── Agency ───────────────────────────────────────────────────────────────────
+
+model Agency {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  logoUrl           String?
+  primaryColor      String   @default("#6366f1")
+  metaAppId         String?
+  metaAppSecret     String?
+  metaWebhookSecret String?
+  smtpHost          String?
+  smtpPort          Int?
+  smtpUser          String?
+  smtpPass          String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  users       User[]
+  clients     Client[]
+  plans       Plan[]
+  interConfig InterConfig?
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          UserRole  @default(EMPLOYEE)
+  phone         String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  agencyId String?
+  agency   Agency? @relation(fields: [agencyId], references: [id])
+
+  clientId String?
+  client   Client? @relation("ClientUsers", fields: [clientId], references: [id])
+
+  accounts      Account[]
+  sessions      Session[]
+  artRequests   ArtRequest[]
+  approvals     Approval[]
+  notifications Notification[]
+  postComments  PostComment[]
+
+  @@index([agencyId])
+  @@index([clientId])
+  @@index([role])
+}
+
+// NextAuth v5 required models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Client (Tenant) ──────────────────────────────────────────────────────────
+
+model Client {
+  id                 String   @id @default(cuid())
+  name               String
+  slug               String   @unique
+  logoUrl            String?
+  brandColors        Json     @default("{}")
+  instagramHandle    String?
+  facebookPageId     String?
+  metaAccessToken    String?
+  metaTokenExpiry    DateTime?
+  instagramAccountId String?
+  whatsappNumber     String?
+  timezone           String   @default("America/Sao_Paulo")
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  agencyId String
+  agency   Agency @relation(fields: [agencyId], references: [id])
+
+  // Dados de cobrança (pagador do boleto Inter)
+  billingCpfCnpj    String?
+  billingTipoPessoa String?  // "FISICA" | "JURIDICA"
+  billingEmail      String?
+  billingAddress    String?
+  billingCity       String?
+  billingState      String?
+  billingZipCode    String?
+
+  users          User[]          @relation("ClientUsers")
+  posts          Post[]
+  artRequests    ArtRequest[]
+  socialAccounts SocialAccount[]
+  subscriptions  Subscription[]
+
+  @@index([agencyId])
+  @@index([slug])
+}
+
+model SocialAccount {
+  id           String        @id @default(cuid())
+  network      SocialNetwork
+  accountId    String
+  handle       String?
+  accessToken  String?       @db.Text
+  tokenExpiry  DateTime?
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  posts Post[]
+
+  @@unique([clientId, network, accountId])
+  @@index([clientId])
+}
+
+// ─── Posts ────────────────────────────────────────────────────────────────────
+
+model Post {
+  id            String        @id @default(cuid())
+  title         String
+  caption       String?       @db.Text
+  hashtags      String[]
+  network       SocialNetwork
+  status        PostStatus    @default(DRAFT)
+  scheduledAt   DateTime?
+  publishedAt   DateTime?
+  metaPostId    String?
+  metaPermalink String?
+  errorMessage  String?       @db.Text
+  isCarousel    Boolean       @default(false)
+  position      Int           @default(0)
+  notes         String?       @db.Text
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  socialAccountId String?
+  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id])
+
+  artRequestId String?     @unique
+  artRequest   ArtRequest? @relation(fields: [artRequestId], references: [id])
+
+  media     PostMedia[]
+  approvals Approval[]
+  comments  PostComment[]
+
+  @@index([clientId, scheduledAt])
+  @@index([clientId, status])
+  @@index([status, scheduledAt])
+}
+
+model PostMedia {
+  id        String   @id @default(cuid())
+  url       String
+  type      String
+  width     Int?
+  height    Int?
+  sizeBytes Int?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+}
+
+// ─── Art Requests ─────────────────────────────────────────────────────────────
+
+model ArtRequest {
+  id           String           @id @default(cuid())
+  title        String
+  type         ArtRequestType
+  status       ArtRequestStatus @default(OPEN)
+  briefing     String           @db.Text
+  format       String?
+  deadline     DateTime?
+  priority     Int              @default(0)
+  notes        String?          @db.Text
+  assignedToId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  requestedById String
+  requestedBy   User   @relation(fields: [requestedById], references: [id])
+
+  attachments  ArtRequestAttachment[]
+  deliverables ArtRequestDeliverable[]
+  revisions    ArtRequestRevision[]
+  post         Post?
+
+  @@index([clientId, status])
+  @@index([requestedById])
+  @@index([status, priority])
+}
+
+model ArtRequestAttachment {
+  id           String   @id @default(cuid())
+  url          String
+  fileName     String
+  mimeType     String
+  sizeBytes    Int?
+  createdAt    DateTime @default(now())
+
+  artRequestId String
+  artRequest   ArtRequest @relation(fields: [artRequestId], references: [id], onDelete: Cascade)
+
+  @@index([artRequestId])
+}
+
+model ArtRequestDeliverable {
+  id           String   @id @default(cuid())
+  url          String
+  fileName     String
+  mimeType     String
+  sizeBytes    Int?
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+
+  artRequestId String
+  artRequest   ArtRequest @relation(fields: [artRequestId], references: [id], onDelete: Cascade)
+
+  @@index([artRequestId])
+}
+
+model ArtRequestRevision {
+  id           String   @id @default(cuid())
+  comment      String   @db.Text
+  authorId     String
+  createdAt    DateTime @default(now())
+
+  artRequestId String
+  artRequest   ArtRequest @relation(fields: [artRequestId], references: [id], onDelete: Cascade)
+
+  @@index([artRequestId])
+}
+
+// ─── Approvals ────────────────────────────────────────────────────────────────
+
+model Approval {
+  id            String         @id @default(cuid())
+  status        ApprovalStatus @default(PENDING)
+  comment       String?        @db.Text
+  reviewedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  postId        String
+  post          Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  requestedById String
+  reviewedById  String?
+  reviewer      User?  @relation(fields: [reviewedById], references: [id])
+
+  @@index([postId])
+  @@index([reviewedById])
+  @@index([status])
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String              @id @default(cuid())
+  channel   NotificationChannel
+  subject   String?
+  body      String              @db.Text
+  sentAt    DateTime?
+  error     String?
+  read      Boolean             @default(false)
+  createdAt DateTime            @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, read])
+}
+
+// ─── Billing ──────────────────────────────────────────────────────────────────
+
+model Plan {
+  id          String       @id @default(cuid())
+  name        String
+  description String?      @db.Text
+  price       Decimal      @db.Decimal(10, 2)
+  cycle       BillingCycle @default(MONTHLY)
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  agencyId      String
+  agency        Agency         @relation(fields: [agencyId], references: [id])
+  subscriptions Subscription[]
+
+  @@index([agencyId])
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  status             String    @default("ACTIVE") // ACTIVE | SUSPENDED | CANCELLED
+  billingDay         Int       // dia do mês para vencimento (1-28)
+  daysBeforeDue      Int       @default(5)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelledAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+  planId   String
+  plan     Plan   @relation(fields: [planId], references: [id])
+  invoices Invoice[]
+
+  @@index([clientId])
+  @@index([planId])
+  @@index([status, billingDay])
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  seuNumero       String        @unique
+  nossoNumero     String?       @unique
+  status          InvoiceStatus @default(PENDING)
+  amount          Decimal       @db.Decimal(10, 2)
+  dueDate         DateTime
+  referenceMonth  String        // "2024-03"
+  boletoUrl       String?
+  boletoCreatedAt DateTime?
+  sentAt          DateTime?
+  paidAt          DateTime?
+  paidAmount      Decimal?      @db.Decimal(10, 2)
+  cancelledAt     DateTime?
+  errorMessage    String?       @db.Text
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([nossoNumero])
+}
+
+model InterConfig {
+  id            String   @id @default(cuid())
+  clientId      String   // client_id OAuth Inter
+  clientSecret  String   @db.Text // criptografado
+  certBase64    String   @db.Text // certificado .crt em base64
+  keyBase64     String   @db.Text // chave .key em base64 (criptografada)
+  contaCorrente String
+  webhookSecret String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  agencyId String @unique
+  agency   Agency @relation(fields: [agencyId], references: [id])
+}
+
+// ─── Post Comments ────────────────────────────────────────────────────────────
+
+model PostComment {
+  id        String   @id @default(cuid())
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  postId   String
+  post     Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId String
+  author   User @relation(fields: [authorId], references: [id])
+
+  @@index([postId])
+}
